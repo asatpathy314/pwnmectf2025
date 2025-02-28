@@ -1,48 +1,59 @@
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
-#include <time.h>
-#include <string.h>
 
-#define BUFFER_SIZE 4096
+// Custom PRNG implementation
+uint64_t seed;
 
-int main(int argc, char **argv) {
-    if(argc < 2) {
-        printf("Usage: %s <filename>\n", argv[0]);
-        return 1;
+void srand_custom(int32_t arg1) {
+    seed = (uint64_t)(arg1 - 1);  // Matches decompiled srand behavior
+}
+
+uint32_t rand_custom() {
+    seed = 0x5851f42d4c957f2d * seed + 1;
+    return (uint32_t)(seed >> 33);  // Return upper 31 bits
+}
+
+int is_all_printable(const uint8_t *buf, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        if (buf[i] < 32 || buf[i] > 126) return 0;
     }
-    
-    const time_t start_seed = 1717214400;
-    const time_t end_seed = 1714536000;
-    const char *flag = "PWNME";
-    unsigned char buffer[BUFFER_SIZE];
-    
-    for(time_t seed = start_seed; seed >= end_seed; --seed) {
-        srand(seed);
-        FILE *fp = fopen(argv[1], "rb");
-        if(!fp) {
-            printf("Can't open file %s\n", argv[1]);
-            return 1;
-        }
-        
-        size_t bytes_read = 0;
-        int c;
-        while((c = fgetc(fp)) != EOF && bytes_read < sizeof(buffer)) {
-            int key = rand();
-            int mod_key = key - ((key/0x7F) * 0x7F);
-            buffer[bytes_read++] = mod_key ^ c;
-        }
-        fclose(fp);
-        
-        if(bytes_read >= strlen(flag)) {
-            void *found = memmem(buffer, bytes_read, flag, strlen(flag));
-            if(found) {
-                printf("Found valid seed: %ld\n", seed);
-                fwrite(buffer, 1, bytes_read, stdout);
-                return 0;
-            }
-        }
-    }
-    
-    printf("No valid seed found in range\n");
     return 1;
 }
+
+int main() {
+    // Read encrypted file
+    FILE *fp = fopen("flag.enc", "rb");
+    fseek(fp, 0, SEEK_END);
+    size_t len = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    uint8_t *cipher = malloc(len);
+    fread(cipher, 1, len, fp);
+    fclose(fp);
+
+    // May 2024 range (UTC)
+    const uint32_t start = 1714521600;
+    const uint32_t end = 1717199999;
+
+    // Brute-force loop
+    for (uint32_t ts = start; ts <= end; ts++) {
+        uint8_t *plain = malloc(len);
+        srand_custom(ts);  // Seed set to ts-1 per decompiled code
+        
+        // Decrypt with custom PRNG
+        for (size_t i = 0; i < len; i++) {
+            plain[i] = cipher[i] ^ (rand_custom() % 127);
+        }
+
+        if (is_all_printable(plain, len)) {
+            printf("Potential plaintext (seed %u):\n", ts);
+            printf("%.*s\n\n", (int)len, plain);
+        }
+        
+        free(plain);
+    }
+
+    free(cipher);
+    return 0;
+}
+
